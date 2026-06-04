@@ -4,16 +4,15 @@ using UnityEngine;
 namespace LevelStreaming
 {
     /// <summary>
-    /// Sight-driven streaming (SRS 4.3): loads only chunks the cone can currently see,
-    /// plus the player's own chunk. Pair with the Mouse-aim toggle to "paint" loaded
-    /// chunks with the cursor. Falls back to just the player chunk if no SightCone exists.
+    /// Sight-driven streaming (SRS 4.3): loads only chunks the cone can currently see, plus the
+    /// player's own chunk. Combine with the Mouse-aim toggle to "paint" loaded chunks with the cursor.
     /// </summary>
-    public class SightStreamStrategy : MonoBehaviour, IStreamingStrategy
+    [CreateAssetMenu(menuName = "Level Streaming/Strategy/Sight Cone", fileName = "SightConeStrategy")]
+    public class SightConeStrategy : StreamingStrategy
     {
-        public string DisplayName => "Sight Cone";
-        public int SortOrder => 2;
+        protected override string DefaultName => "Sight Cone";
 
-        public IEnumerable<ChunkCoord> GetDesiredChunks(ChunkCoord playerChunk, StreamingContext ctx)
+        public override IEnumerable<ChunkCoord> GetDesiredChunks(ChunkCoord playerChunk, StreamingContext ctx)
         {
             yield return playerChunk; // keep the ground under the player loaded
 

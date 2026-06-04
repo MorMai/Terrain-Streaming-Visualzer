@@ -17,9 +17,12 @@ namespace LevelStreaming
         [SerializeField] private PlayerController player;
         [SerializeField] private SightCone sight;
 
-        [Header("Strategies")]
-        [Tooltip("If on, the Radius and Sight-Cone strategies are added automatically so the Back/Next buttons have something to cycle through.")]
-        public bool autoPopulateStrategies = true;
+        [Header("Strategies (ScriptableObject assets)")]
+        [Tooltip("Ordered list of streaming-strategy assets. Cycle with Back/Next in the order shown here. " +
+                 "Create assets via the Project window: Create > Level Streaming > Strategy > ...")]
+        public List<StreamingStrategy> strategies = new();
+        [Tooltip("Which strategy in the list is active on start.")]
+        [Min(0)] public int startIndex = 0;
 
         [Header("Simulated load timing")]
         [Min(0f)] public float loadDelay = 0.6f;
@@ -55,19 +58,10 @@ namespace LevelStreaming
         private void BuildStrategyList()
         {
             _strategies.Clear();
-            foreach (var mb in FindObjectsOfType<MonoBehaviour>())
-                if (mb is IStreamingStrategy s) _strategies.Add(s);
+            foreach (var s in strategies)
+                if (s != null) _strategies.Add(s); // skip empty slots in the asset list
 
-            if (autoPopulateStrategies)
-            {
-                if (!_strategies.Exists(s => s is RadiusStrategy))
-                    _strategies.Add(gameObject.AddComponent<RadiusStrategy>());
-                if (!_strategies.Exists(s => s is SightStreamStrategy))
-                    _strategies.Add(gameObject.AddComponent<SightStreamStrategy>());
-            }
-
-            _strategies.Sort((a, b) => a.SortOrder.CompareTo(b.SortOrder));
-            _activeIndex = Mathf.Clamp(_activeIndex, 0, Mathf.Max(0, _strategies.Count - 1));
+            _activeIndex = Mathf.Clamp(startIndex, 0, Mathf.Max(0, _strategies.Count - 1));
             _strategy = _strategies.Count > 0 ? _strategies[_activeIndex] : null;
         }
 

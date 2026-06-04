@@ -25,9 +25,6 @@ namespace LevelStreaming
         /// <summary>Human-readable name shown in the debug UI title.</summary>
         string DisplayName { get; }
 
-        /// <summary>Stable ordering for the Back/Next cycle (lower = earlier).</summary>
-        int SortOrder { get; }
-
         IEnumerable<ChunkCoord> GetDesiredChunks(ChunkCoord playerChunk, StreamingContext ctx);
     }
 }

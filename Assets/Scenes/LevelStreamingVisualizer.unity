@@ -1024,7 +1024,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image
   m_Material: {fileID: 0}
-  m_Color: {r: 0.09, g: 0.1, b: 0.14, a: 0.88}
+  m_Color: {r: 0.12156863, g: 0.12156863, b: 0.12156863, a: 0.88}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -1593,7 +1593,6 @@ GameObject:
   m_Component:
   - component: {fileID: 579457432}
   - component: {fileID: 579457431}
-  - component: {fileID: 579457430}
   m_Layer: 0
   m_Name: StreamingManager
   m_TagString: Untagged
@@ -1601,19 +1600,6 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &579457430
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 579457429}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 03c69009729e9aa448816b6a2efdc2e0, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::LevelStreaming.GridWindowStrategy
-  radius: 1
 --- !u!114 &579457431
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1628,7 +1614,11 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LevelStreaming.StreamingManager
   player: {fileID: 0}
   sight: {fileID: 0}
-  autoPopulateStrategies: 1
+  strategies:
+  - {fileID: 11400000, guid: 147850c3a41b00a449fd83bb0b06d87c, type: 2}
+  - {fileID: 11400000, guid: d9d9b07b433c563408e9094ec3182a45, type: 2}
+  - {fileID: 11400000, guid: ad7aec55eada7d64697299c7472fb9de, type: 2}
+  startIndex: 0
   loadDelay: 0.5
   unloadDelay: 0.25
   logStateChanges: 1
@@ -3341,7 +3331,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image
   m_Material: {fileID: 0}
-  m_Color: {r: 0.09, g: 0.1, b: 0.14, a: 0.88}
+  m_Color: {r: 0.11949676, g: 0.11949676, b: 0.11949676, a: 0.88}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
