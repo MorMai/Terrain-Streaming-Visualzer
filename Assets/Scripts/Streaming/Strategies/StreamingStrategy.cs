@@ -22,5 +22,12 @@ namespace LevelStreaming
         protected abstract string DefaultName { get; }
 
         public abstract IEnumerable<ChunkCoord> GetDesiredChunks(ChunkCoord playerChunk, StreamingContext ctx);
+
+        /// <summary>
+        /// Default: recompute only when the player's chunk changes. Dynamic strategies (e.g. the
+        /// sight cone) override this to also react to aim/position.
+        /// </summary>
+        public virtual StreamingSignature GetSignature(ChunkCoord playerChunk, StreamingContext ctx)
+            => new StreamingSignature(playerChunk.cx, playerChunk.cy, 0, 0);
     }
 }

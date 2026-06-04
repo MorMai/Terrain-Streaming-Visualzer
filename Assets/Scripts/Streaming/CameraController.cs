@@ -32,6 +32,7 @@ namespace LevelStreaming
         [Tooltip("Time (s) to ease to the target zoom. 0 = instant.")]
         [Min(0f)] public float zoomSmoothTime = 0.12f;
         public bool enableScrollZoom = true;
+        [Min(10f)] public float scrollZoomSensitivity = 10f;
 
         public bool FollowPlayer { get => followPlayer; set => followPlayer = value; }
         public float CurrentZoom => cam != null ? cam.orthographicSize : 0f;
@@ -111,7 +112,7 @@ namespace LevelStreaming
             if (Mouse.current == null) return 0f;
             return Mouse.current.scroll.ReadValue().y / 120f; // normalize notch to ~±1
 #else
-            return Input.GetAxis("Mouse ScrollWheel") * 10f;
+            return Input.GetAxis("Mouse ScrollWheel") * scrollZoomSensitivity;
 #endif
         }
     }

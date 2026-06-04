@@ -43,7 +43,7 @@ namespace LevelStreaming
         private IStreamingStrategy _strategy;
         private readonly Dictionary<ChunkCoord, Chunk> _chunks = new();
         private readonly Dictionary<ChunkCoord, Coroutine> _running = new();
-        private ChunkCoord _lastPlayerChunk;
+        private StreamingSignature _lastSignature;
         private bool _initialized;
 
         public float ChunkSize => player != null ? player.chunkSize : 1f;
@@ -78,7 +78,12 @@ namespace LevelStreaming
             if (_strategies.Count == 0) return;
             _activeIndex = ((index % _strategies.Count) + _strategies.Count) % _strategies.Count;
             _strategy = _strategies[_activeIndex];
-            if (_initialized) Recompute(player.CurrentChunk); // re-stream under the new policy
+            if (_initialized)
+            {
+                var ctx = BuildContext();
+                _lastSignature = _strategy.GetSignature(player.CurrentChunk, ctx);
+                Recompute(player.CurrentChunk, ctx); // re-stream under the new policy
+            }
             StrategyChanged?.Invoke();
         }
 
@@ -102,25 +107,39 @@ namespace LevelStreaming
                 enabled = false;
                 return;
             }
-            _lastPlayerChunk = player.CurrentChunk;
             _initialized = true;
-            Recompute(_lastPlayerChunk); // initial window
+            var ctx = BuildContext();
+            _lastSignature = _strategy.GetSignature(player.CurrentChunk, ctx);
+            Recompute(player.CurrentChunk, ctx); // initial window
         }
 
         void Update()
         {
-            if (!_initialized) return;
-            ChunkCoord now = player.CurrentChunk;
-            if (now != _lastPlayerChunk)
+            if (!_initialized || _strategy == null) return;
+
+            // Re-stream only when the active strategy's signature changes. For chunk-based
+            // strategies that's a boundary crossing; for the sight cone it's a change in aim/position.
+            var ctx = BuildContext();
+            var sig = _strategy.GetSignature(player.CurrentChunk, ctx);
+            if (!sig.Equals(_lastSignature))
             {
-                _lastPlayerChunk = now;
-                Recompute(now); // boundary crossing only
+                _lastSignature = sig;
+                Recompute(player.CurrentChunk, ctx);
             }
         }
 
-        private void Recompute(ChunkCoord playerChunk)
+        private StreamingContext BuildContext()
         {
-            var ctx = new StreamingContext { ChunkSize = ChunkSize, Sight = sight };
+            return new StreamingContext
+            {
+                ChunkSize = ChunkSize,
+                Sight = sight,
+                PlayerWorldPos = player != null ? player.WorldPos : Vector2.zero,
+            };
+        }
+
+        private void Recompute(ChunkCoord playerChunk, StreamingContext ctx)
+        {
             var desired = new HashSet<ChunkCoord>(_strategy.GetDesiredChunks(playerChunk, ctx));
 
             // Load newly desired chunks not already loaded/loading.

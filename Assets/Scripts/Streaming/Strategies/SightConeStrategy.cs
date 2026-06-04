@@ -10,7 +10,29 @@ namespace LevelStreaming
     [CreateAssetMenu(menuName = "Level Streaming/Strategy/Sight Cone", fileName = "SightConeStrategy")]
     public class SightConeStrategy : StreamingStrategy
     {
+        [Header("Recompute sensitivity")]
+        [Tooltip("World-space movement bucket: the cone re-streams when the player moves this far.")]
+        [Min(0.01f)] public float positionStep = 0.2f;
+        [Tooltip("Facing bucket in degrees: the cone re-streams when its aim rotates this much.")]
+        [Min(0.5f)] public float angleStep = 4f;
+
         protected override string DefaultName => "Sight Cone";
+
+        // Re-stream as the cone is aimed/moved, not just on chunk crossings.
+        public override StreamingSignature GetSignature(ChunkCoord playerChunk, StreamingContext ctx)
+        {
+            SightCone sight = ctx.Sight;
+            if (sight == null) return base.GetSignature(playerChunk, ctx);
+
+            int qx = Mathf.RoundToInt(ctx.PlayerWorldPos.x / positionStep);
+            int qy = Mathf.RoundToInt(ctx.PlayerWorldPos.y / positionStep);
+
+            Vector2 f = sight.CurrentFacing;
+            float angle = Mathf.Atan2(f.y, f.x) * Mathf.Rad2Deg;
+            int qa = Mathf.RoundToInt(angle / angleStep);
+
+            return new StreamingSignature(qx, qy, qa, 0);
+        }
 
         public override IEnumerable<ChunkCoord> GetDesiredChunks(ChunkCoord playerChunk, StreamingContext ctx)
         {

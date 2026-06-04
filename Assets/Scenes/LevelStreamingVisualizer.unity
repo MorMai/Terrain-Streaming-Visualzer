@@ -4952,6 +4952,7 @@ MonoBehaviour:
   zoomStep: 1
   zoomSmoothTime: 0.12
   enableScrollZoom: 1
+  scrollZoomSensitivity: 10
 --- !u!1 &1954352658
 GameObject:
   m_ObjectHideFlags: 0
