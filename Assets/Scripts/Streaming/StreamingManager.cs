@@ -21,7 +21,9 @@ namespace LevelStreaming
         [Min(0)] public int startIndex = 0;
 
         [Header("Simulated load timing")]
+        [Tooltip("Seconds in the Loading state before a chunk becomes Loaded. 0 = instant.")]
         [Min(0f)] public float loadDelay = 0.6f;
+        [Tooltip("Seconds in the Unloading state before a chunk becomes Unloaded. 0 = instant.")]
         [Min(0f)] public float unloadDelay = 0.25f;
 
         [Header("Unload hysteresis")]

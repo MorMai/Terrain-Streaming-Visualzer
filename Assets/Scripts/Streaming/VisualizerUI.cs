@@ -51,6 +51,10 @@ namespace LevelStreaming
         public Text viewDistanceLabel;
         public Button resetSightButton;
 
+        [Header("Load timing")]
+        public InputField loadDelayInput;
+        public InputField unloadDelayInput;
+
         [Header("Hysteresis")]
         public Toggle timeHysteresisToggle;
         public Toggle distanceHysteresisToggle;
@@ -124,6 +128,17 @@ namespace LevelStreaming
                 floatingOriginToggle.onValueChanged.AddListener(v => { if (floatingOrigin != null) floatingOrigin.useFloatingOrigin = v; });
             }
 
+            if (loadDelayInput != null)
+            {
+                loadDelayInput.text = manager != null ? manager.loadDelay.ToString("0.###") : "0.6";
+                loadDelayInput.onEndEdit.AddListener(OnLoadDelayEntered);
+            }
+            if (unloadDelayInput != null)
+            {
+                unloadDelayInput.text = manager != null ? manager.unloadDelay.ToString("0.###") : "0.25";
+                unloadDelayInput.onEndEdit.AddListener(OnUnloadDelayEntered);
+            }
+
             if (timeHysteresisToggle != null)
             {
                 if (manager != null) timeHysteresisToggle.SetIsOnWithoutNotify(manager.useTimeHysteresis);
@@ -152,6 +167,23 @@ namespace LevelStreaming
                 player.moveSpeed = v;
             if (moveSpeedInput != null && player != null)
                 moveSpeedInput.text = player.moveSpeed.ToString("0.###");
+        }
+
+        // Simulated load/unload durations (seconds). 0 = instant.
+        private void OnLoadDelayEntered(string s)
+        {
+            if (manager != null && TryParse(s, out float v) && v >= 0f)
+                manager.loadDelay = v;
+            if (loadDelayInput != null && manager != null)
+                loadDelayInput.text = manager.loadDelay.ToString("0.###");
+        }
+
+        private void OnUnloadDelayEntered(string s)
+        {
+            if (manager != null && TryParse(s, out float v) && v >= 0f)
+                manager.unloadDelay = v;
+            if (unloadDelayInput != null && manager != null)
+                unloadDelayInput.text = manager.unloadDelay.ToString("0.###");
         }
 
         private static bool TryParse(string s, out float value) => float.TryParse(
