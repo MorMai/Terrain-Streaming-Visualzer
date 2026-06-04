@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
@@ -7,7 +8,9 @@ namespace LevelStreaming
 {
     /// <summary>
     /// Top-down movement. Single source of truth for chunkSize and the world->chunk mapping.
-    /// Exposes WorldPos, CurrentChunk and Facing for the rest of the system.
+    /// Distinguishes RENDERED position (transform, kept near origin by the floating-origin system)
+    /// from ABSOLUTE/virtual position (rendered + offset). Chunk coordinates derive from the
+    /// absolute position so streaming is unaffected by origin rebasing.
     /// </summary>
     public class PlayerController : MonoBehaviour
     {
@@ -18,11 +21,39 @@ namespace LevelStreaming
         [Header("Movement")]
         [Min(0f)] public float moveSpeed = 4f;
 
+        [Header("Floating origin (optional)")]
+        public FloatingOrigin floatingOrigin;
+
+        /// <summary>Rendered (rebased) position — what the camera actually shows.</summary>
         public Vector2 WorldPos => transform.position;
-        public ChunkCoord CurrentChunk => ChunkCoord.FromWorld(WorldPos, chunkSize);
+
+        public double OffsetX => floatingOrigin != null ? floatingOrigin.OffsetX : 0.0;
+        public double OffsetY => floatingOrigin != null ? floatingOrigin.OffsetY : 0.0;
+
+        /// <summary>Absolute (virtual) position = rendered + accumulated origin offset.</summary>
+        public double AbsoluteX => transform.position.x + OffsetX;
+        public double AbsoluteY => transform.position.y + OffsetY;
+        public Vector2 AbsolutePosition => new Vector2((float)AbsoluteX, (float)AbsoluteY);
+
+        public ChunkCoord CurrentChunk => new ChunkCoord(
+            (int)Math.Floor(AbsoluteX / chunkSize),
+            (int)Math.Floor(AbsoluteY / chunkSize));
 
         /// <summary>Normalized facing direction, retained when standing still.</summary>
         public Vector2 Facing { get; private set; } = Vector2.up;
+
+        void Awake()
+        {
+            if (floatingOrigin == null) floatingOrigin = FindObjectOfType<FloatingOrigin>();
+        }
+
+        /// <summary>Rendered (rebased) world center of a chunk, accounting for the origin offset.</summary>
+        public Vector2 ChunkCenterRendered(ChunkCoord c)
+        {
+            double ax = (c.cx + 0.5) * chunkSize;
+            double ay = (c.cy + 0.5) * chunkSize;
+            return new Vector2((float)(ax - OffsetX), (float)(ay - OffsetY));
+        }
 
         void Update()
         {

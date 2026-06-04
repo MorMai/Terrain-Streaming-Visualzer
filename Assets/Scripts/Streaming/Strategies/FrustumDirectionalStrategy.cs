@@ -5,24 +5,18 @@ namespace LevelStreaming
 {
     /// <summary>
     /// Advanced directional frustum strategy modeled after World Streamer 2.
-    /// Uses a combined viewing angle, forward direction projection, and falloff radius
-    /// to prioritize streaming chunks ahead of the camera while aggressively discarding rear chunks.
+    /// Tracks look-angles, position shifts, and inspector configuration changes 
+    /// to immediately force streaming updates during live visualization tweaking.
     /// </summary>
     [CreateAssetMenu(menuName = "Level Streaming/Strategy/Frustum Directional", fileName = "FrustumDirectionalStrategy")]
     public class FrustumDirectionalStrategy : StreamingStrategy
     {
-        [Header("Frustum / Cone settings")]
-        [Tooltip("Maximum visual depth distance in world units to stream chunks.")]
-        [Min(1f)] public float viewDistance = 15f;
-        [Tooltip("The angle width (FOV) in degrees facing forward to load chunks.")]
-        [Range(10f, 180f)] public float fieldOfView = 90f;
-
-        [Header("Directional Weight")]
-        [Tooltip("Pushes the loading center forward along the viewing vector to pre-cache chunks ahead of the player.")]
-        [Min(0f)] public float forwardBias = 3f;
+        [Header("Directional Bias Weight")]
+        [Tooltip("Pushes the scanning center forward along the viewing vector to pre-cache chunks ahead of the player's movement.")]
+        [Min(0f)] public float forwardBias = 5f;
 
         [Header("Safety Margin")]
-        [Tooltip("A strict block radius behind/around the player that always stays loaded to prevent instant edge clipping.")]
+        [Tooltip("A strict block radius around the player that always stays loaded to avoid instant clipping when stepping backward.")]
         [Min(0)] public int safetyRadius = 1;
 
         [Header("Recompute sensitivity")]
@@ -33,32 +27,30 @@ namespace LevelStreaming
 
         protected override string DefaultName => "Frustum Directional (WS2 style)";
 
-        /// <summary>
-        /// Recalculates whenever the player shifts past position thresholds or shifts their orientation angle.
-        /// </summary>
         public override StreamingSignature GetSignature(ChunkCoord playerChunk, StreamingContext ctx)
         {
             SightCone sight = ctx.Sight;
             if (sight == null) return base.GetSignature(playerChunk, ctx);
 
-            // Grid coordinate quantizations
+            // 1. Quantize position shifts
             int qx = Mathf.RoundToInt(ctx.PlayerWorldPos.x / positionStep);
             int qy = Mathf.RoundToInt(ctx.PlayerWorldPos.y / positionStep);
 
-            // Angular quantization
+            // 2. Quantize camera orientation angles
             Vector2 forwardDir = sight.CurrentFacing;
             float currentAngle = Mathf.Atan2(forwardDir.y, forwardDir.x) * Mathf.Rad2Deg;
             int qa = Mathf.RoundToInt(currentAngle / angleStep);
 
-            return new StreamingSignature(qx, qy, qa, 1);
+            // 3. CRITICAL: Mix in configuration settings to force a refresh on inspector changes!
+            // We use GetHashCode of the values combined with our settings to create a reactive key.
+            int configHash = forwardBias.GetHashCode() ^ safetyRadius.GetHashCode() ^ sight.viewDistance.GetHashCode();
+
+            return new StreamingSignature(qx, qy, qa, configHash);
         }
 
         public override IEnumerable<ChunkCoord> GetDesiredChunks(ChunkCoord playerChunk, StreamingContext ctx)
         {
-            SightCone sight = ctx.Sight;
-            float size = ctx.ChunkSize > 0f ? ctx.ChunkSize : 1f;
-
-            // Step 1: Secure immediate safety grid around player (e.g. 3x3 if safetyRadius is 1)
+            // Secure immediate safety grid around the player
             for (int dy = -safetyRadius; dy <= safetyRadius; dy++)
             {
                 for (int dx = -safetyRadius; dx <= safetyRadius; dx++)
@@ -67,41 +59,38 @@ namespace LevelStreaming
                 }
             }
 
+            SightCone sight = ctx.Sight;
             if (sight == null) yield break;
 
-            // Step 2: Establish the biased focal center and scanning boundary limits
+            float size = ctx.ChunkSize > 0f ? ctx.ChunkSize : 1f;
+
+            // Calculate search radius based on the actual sight view distance plus our forward weight bias
+            int searchRange = Mathf.CeilToInt((sight.viewDistance + forwardBias) / size) + 1;
+
+            // Project an evaluation center forward based on where the player is currently aiming
             Vector2 lookDir = sight.CurrentFacing.normalized;
-            Vector2 biasedOrigin = ctx.PlayerWorldPos + (lookDir * forwardBias);
+            Vector2 biasedWorldPos = ctx.PlayerWorldPos + (lookDir * forwardBias);
 
-            // Total maximum bounding grid check derived from visual range depth + directional bias extension
-            int searchRange = Mathf.CeilToInt((viewDistance + forwardBias) / size) + 1;
-            float halfFov = fieldOfView * 0.5f;
+            // Convert that biased position back to a grid chunk coordinate to look ahead
+            int biasedCx = Mathf.FloorToInt(biasedWorldPos.x / size);
+            int biasedCy = Mathf.FloorToInt(biasedWorldPos.y / size);
 
-            // Step 3: Run the directional / frustum cone scan loop
+            // Scan a grid outward from our predictive biased look-ahead center
             for (int dy = -searchRange; dy <= searchRange; dy++)
             {
                 for (int dx = -searchRange; dx <= searchRange; dx++)
                 {
-                    // Skip immediate blocks we already yielded inside the safety pass
-                    if (Mathf.Abs(dx) <= safetyRadius && Mathf.Abs(dy) <= safetyRadius)
+                    ChunkCoord targetCoord = new ChunkCoord(biasedCx + dx, biasedCy + dy);
+
+                    // Skip if this chunk falls inside our safety radius zone (already yielded above)
+                    if (Mathf.Abs(targetCoord.cx - playerChunk.cx) <= safetyRadius &&
+                        Mathf.Abs(targetCoord.cy - playerChunk.cy) <= safetyRadius)
+                    {
                         continue;
+                    }
 
-                    ChunkCoord targetCoord = new ChunkCoord(playerChunk.cx + dx, playerChunk.cy + dy);
-                    Vector2 targetWorldPos = targetCoord.ToWorldCenter(size);
-
-                    // Vector originating from the player to the destination chunk center
-                    Vector2 toChunk = targetWorldPos - ctx.PlayerWorldPos;
-                    float distance = toChunk.magnitude;
-
-                    // Out of streaming depth window cut-off
-                    if (distance > viewDistance + forwardBias)
-                        continue;
-
-                    // Directional calculation: Determine angle discrepancy between player gaze and chunk orientation
-                    float angleToChunk = Vector2.Angle(lookDir, toChunk);
-
-                    // If it fits within the specified sight cone / frustum slice, cache it
-                    if (angleToChunk <= halfFov)
+                    // Hand off evaluation cleanly to your game framework's native rules
+                    if (sight.IsChunkInSight(targetCoord))
                     {
                         yield return targetCoord;
                     }

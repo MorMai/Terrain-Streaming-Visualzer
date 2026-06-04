@@ -8,8 +8,7 @@ namespace LevelStreaming
     /// <summary>
     /// Heart of the system. Detects when the player crosses a chunk boundary, asks the active
     /// IStreamingStrategy which chunks it wants, diffs that against what is currently loaded/loading,
-    /// and drives simulated load/unload lifecycles. Knows nothing about rendering: it only raises
-    /// <see cref="ChunkStateChanged"/>. Recomputes ONLY on boundary crossings (NFR-3), no per-frame work.
+    /// and drives simulated load/unload lifecycles.
     /// </summary>
     public class StreamingManager : MonoBehaviour
     {
@@ -18,27 +17,27 @@ namespace LevelStreaming
         [SerializeField] private SightCone sight;
 
         [Header("Strategies (ScriptableObject assets)")]
-        [Tooltip("Ordered list of streaming-strategy assets. Cycle with Back/Next in the order shown here. " +
-                 "Create assets via the Project window: Create > Level Streaming > Strategy > ...")]
         public List<StreamingStrategy> strategies = new();
-        [Tooltip("Which strategy in the list is active on start.")]
         [Min(0)] public int startIndex = 0;
 
         [Header("Simulated load timing")]
         [Min(0f)] public float loadDelay = 0.6f;
         [Min(0f)] public float unloadDelay = 0.25f;
 
+        [Header("Unload hysteresis")]
+        [Tooltip("Time-based: an unwanted chunk waits this long (seconds) before it may unload.")]
+        public bool useTimeHysteresis = true;
+        [Min(0f)] public float unloadCooldown = 3.0f;
+        [Tooltip("Distance-based: an unwanted chunk stays loaded until the player is at least this far (world units) from it.")]
+        public bool useDistanceHysteresis = false;
+        [Min(0f)] public float unloadDistance = 4.0f;
+
         [Header("Debug")]
         public bool logStateChanges = true;
         public bool drawGizmos = true;
 
-        /// <summary>Raised after any chunk changes state. The renderer subscribes to this.</summary>
         public event Action<Chunk> ChunkStateChanged;
-
-        /// <summary>Raised after the active strategy changes (e.g. via Back/Next).</summary>
         public event Action StrategyChanged;
-
-        /// <summary>Raised when the world is reset (e.g. chunk size changed). Views drop and rebuild.</summary>
         public event Action WorldReset;
 
         private readonly List<IStreamingStrategy> _strategies = new();
@@ -46,6 +45,10 @@ namespace LevelStreaming
         private IStreamingStrategy _strategy;
         private readonly Dictionary<ChunkCoord, Chunk> _chunks = new();
         private readonly Dictionary<ChunkCoord, Coroutine> _running = new();
+
+        // Track chunks that are cooling down. Key = Chunk, Value = Time when it should actually unload.
+        private readonly Dictionary<ChunkCoord, float> _unloadQueue = new();
+
         private StreamingSignature _lastSignature;
         private bool _initialized;
 
@@ -62,13 +65,12 @@ namespace LevelStreaming
         {
             _strategies.Clear();
             foreach (var s in strategies)
-                if (s != null) _strategies.Add(s); // skip empty slots in the asset list
+                if (s != null) _strategies.Add(s);
 
             _activeIndex = Mathf.Clamp(startIndex, 0, Mathf.Max(0, _strategies.Count - 1));
             _strategy = _strategies.Count > 0 ? _strategies[_activeIndex] : null;
         }
 
-        // ---- Strategy cycling (driven by the debug UI) -------------------------------
         public int StrategyCount => _strategies.Count;
         public int ActiveStrategyIndex => _activeIndex;
         public string ActiveStrategyName => _strategy != null ? _strategy.DisplayName : "<none>";
@@ -85,38 +87,31 @@ namespace LevelStreaming
             {
                 var ctx = BuildContext();
                 _lastSignature = _strategy.GetSignature(player.CurrentChunk, ctx);
-                Recompute(player.CurrentChunk, ctx); // re-stream under the new policy
+                Recompute(player.CurrentChunk, ctx);
             }
             StrategyChanged?.Invoke();
         }
 
-        // ---- World reset (for changes that can't apply live, e.g. chunk size) --------
-
-        /// <summary>
-        /// Apply a new world chunk size. Because every world&lt;-&gt;chunk coordinate depends on it,
-        /// this can't change live: the player is recentered and the whole simulation is reset.
-        /// </summary>
         public void SetChunkSize(float newSize)
         {
             if (player != null)
             {
                 player.chunkSize = Mathf.Max(0.01f, newSize);
                 float z = player.transform.position.z;
-                player.transform.position =
-                    new Vector3(player.chunkSize * 0.5f, player.chunkSize * 0.5f, z); // center of chunk (0,0)
+                player.transform.position = new Vector3(player.chunkSize * 0.5f, player.chunkSize * 0.5f, z);
             }
             ResetStreaming();
         }
 
-        /// <summary>Stop everything, clear all chunks, and re-stream the initial window from scratch.</summary>
         public void ResetStreaming()
         {
             foreach (var co in _running.Values)
                 if (co != null) StopCoroutine(co);
             _running.Clear();
             _chunks.Clear();
+            _unloadQueue.Clear();
 
-            WorldReset?.Invoke(); // tell the renderer to drop its cells and rebuild at the new size
+            WorldReset?.Invoke();
 
             if (_initialized && _strategy != null && player != null)
             {
@@ -126,7 +121,6 @@ namespace LevelStreaming
             }
         }
 
-        // ---- Debug counters ----------------------------------------------------------
         public int TrackedCount => _chunks.Count;
         public ChunkCoord PlayerChunk => player != null ? player.CurrentChunk : default;
 
@@ -149,15 +143,13 @@ namespace LevelStreaming
             _initialized = true;
             var ctx = BuildContext();
             _lastSignature = _strategy.GetSignature(player.CurrentChunk, ctx);
-            Recompute(player.CurrentChunk, ctx); // initial window
+            Recompute(player.CurrentChunk, ctx);
         }
 
         void Update()
         {
             if (!_initialized || _strategy == null) return;
 
-            // Re-stream only when the active strategy's signature changes. For chunk-based
-            // strategies that's a boundary crossing; for the sight cone it's a change in aim/position.
             var ctx = BuildContext();
             var sig = _strategy.GetSignature(player.CurrentChunk, ctx);
             if (!sig.Equals(_lastSignature))
@@ -165,6 +157,9 @@ namespace LevelStreaming
                 _lastSignature = sig;
                 Recompute(player.CurrentChunk, ctx);
             }
+
+            // Process our time-delayed unloads
+            ProcessUnloadQueue();
         }
 
         private StreamingContext BuildContext()
@@ -181,23 +176,81 @@ namespace LevelStreaming
         {
             var desired = new HashSet<ChunkCoord>(_strategy.GetDesiredChunks(playerChunk, ctx));
 
-            // Load newly desired chunks not already loaded/loading.
+            // 1. Load newly desired chunks
             foreach (var coord in desired)
             {
+                // If this chunk was scheduled to be destroyed, rescue it!
+                if (_unloadQueue.ContainsKey(coord))
+                {
+                    _unloadQueue.Remove(coord);
+                    if (logStateChanges) Debug.Log($"[Chunk {coord}] Unload canceled (saved by user movement/rotation).");
+                }
+
                 var st = GetState(coord);
-                if (st == ChunkState.Loaded || st == ChunkState.Loading) continue; // no redundant reloads
+                if (st == ChunkState.Loaded || st == ChunkState.Loading) continue;
                 RequestLoad(coord);
             }
 
-            // Unload anything active that fell outside the window.
+            // 2. Queue undesired active chunks for delayed unload
             var active = new List<ChunkCoord>(_chunks.Keys);
             foreach (var coord in active)
             {
                 if (desired.Contains(coord)) continue;
+
                 var st = _chunks[coord].State;
+                // Only queue chunks that are actually usable or currently trying to get loaded
                 if (st == ChunkState.Loaded || st == ChunkState.Loading)
-                    RequestUnload(coord);
+                {
+                    if (!_unloadQueue.ContainsKey(coord))
+                    {
+                        _unloadQueue[coord] = Time.time; // remember WHEN it became unwanted
+                    }
+                }
             }
+        }
+
+        /// <summary>How many chunks are currently waiting (cooling down) to be unloaded.</summary>
+        public int UnloadQueueCount => _unloadQueue.Count;
+
+        private void ProcessUnloadQueue()
+        {
+            if (_unloadQueue.Count == 0) return;
+
+            float now = Time.time;
+            List<ChunkCoord> toUnload = null;
+
+            foreach (var kvp in _unloadQueue)
+            {
+                ChunkCoord coord = kvp.Key;
+                float queuedAt = kvp.Value;
+
+                // A disabled condition never blocks the unload; an enabled one must be satisfied.
+                bool timeReady = !useTimeHysteresis || (now - queuedAt >= unloadCooldown);
+                bool distanceReady = !useDistanceHysteresis || DistanceReady(coord);
+
+                if (timeReady && distanceReady)
+                {
+                    toUnload ??= new List<ChunkCoord>();
+                    toUnload.Add(coord);
+                }
+            }
+
+            if (toUnload != null)
+            {
+                foreach (var coord in toUnload)
+                {
+                    _unloadQueue.Remove(coord);
+                    RequestUnload(coord); // execute the real unload lifecycle
+                }
+            }
+        }
+
+        // Distance measured in rendered space (translation-invariant, so floating-origin safe).
+        private bool DistanceReady(ChunkCoord coord)
+        {
+            if (player == null) return true;
+            float d = Vector2.Distance(player.WorldPos, player.ChunkCenterRendered(coord));
+            return d >= unloadDistance;
         }
 
         private Chunk GetOrCreate(ChunkCoord coord)
@@ -253,7 +306,6 @@ namespace LevelStreaming
             _running.Remove(chunk.Coord);
         }
 
-        /// <summary>Current state of a chunk; Unloaded if never touched.</summary>
         public ChunkState GetState(ChunkCoord coord)
             => _chunks.TryGetValue(coord, out var c) ? c.State : ChunkState.Unloaded;
 
@@ -263,14 +315,22 @@ namespace LevelStreaming
             float size = ChunkSize;
             foreach (var kv in _chunks)
             {
-                switch (kv.Value.State)
+                // Visual differentiator for chunks cooling down
+                if (_unloadQueue.ContainsKey(kv.Key))
                 {
-                    case ChunkState.Loading:   Gizmos.color = Color.yellow; break;
-                    case ChunkState.Loaded:    Gizmos.color = Color.green;  break;
-                    case ChunkState.Unloading: Gizmos.color = new Color(1f, 0.5f, 0f); break;
-                    default:                   Gizmos.color = Color.gray;   break;
+                    Gizmos.color = new Color(0.5f, 0.2f, 0.8f); // Purple means "Unload Buffer Pending"
                 }
-                Vector2 c = kv.Key.ToWorldCenter(size);
+                else
+                {
+                    switch (kv.Value.State)
+                    {
+                        case ChunkState.Loading: Gizmos.color = Color.yellow; break;
+                        case ChunkState.Loaded: Gizmos.color = Color.green; break;
+                        case ChunkState.Unloading: Gizmos.color = new Color(1f, 0.5f, 0f); break;
+                        default: Gizmos.color = Color.gray; break;
+                    }
+                }
+                Vector2 c = player.ChunkCenterRendered(kv.Key);
                 Gizmos.DrawWireCube(c, new Vector3(size * 0.96f, size * 0.96f, 0f));
             }
         }

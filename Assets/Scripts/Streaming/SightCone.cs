@@ -30,6 +30,15 @@ namespace LevelStreaming
         private LineRenderer _lr;
         private PlayerController _player;
         private Camera _cam;
+        private float _defaultFov;
+        private float _defaultViewDistance;
+
+        /// <summary>Restore FOV and view distance to the values set in the Inspector at startup.</summary>
+        public void ResetToDefaults()
+        {
+            fovAngle = _defaultFov;
+            viewDistance = _defaultViewDistance;
+        }
 
         /// <summary>
         /// Effective facing used for both drawing and IsChunkInSight: the mouse direction
@@ -54,6 +63,8 @@ namespace LevelStreaming
         {
             _lr = GetComponent<LineRenderer>();
             _cam = Camera.main;
+            _defaultFov = fovAngle;
+            _defaultViewDistance = viewDistance;
             _player = GetComponentInParent<PlayerController>();
             if (_player == null) _player = FindObjectOfType<PlayerController>();
 
@@ -95,11 +106,11 @@ namespace LevelStreaming
             }
         }
 
-        /// <summary>True if the given chunk's center lies inside the sight wedge.</summary>
+        /// <summary>True if the given chunk's center lies inside the sight wedge (rendered space).</summary>
         public bool IsChunkInSight(ChunkCoord coord)
         {
             if (_player == null) return false;
-            Vector2 center = coord.ToWorldCenter(_player.chunkSize);
+            Vector2 center = _player.ChunkCenterRendered(coord);
             Vector2 to = center - _player.WorldPos;
             if (to.sqrMagnitude > viewDistance * viewDistance) return false;
 

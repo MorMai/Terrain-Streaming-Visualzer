@@ -160,10 +160,16 @@ namespace LevelStreaming
 
             UpdateBackground(center);
 
-            // Live visuals: recompute targets and ease colors toward them each frame.
+            // Live visuals: keep cells positioned in rendered space (follows origin rebasing),
+            // recompute color targets and ease colors toward them each frame.
             float t = smoothColor ? colorLerpSpeed * Time.deltaTime : 1f;
             foreach (var cell in _cells.Values)
             {
+                if (player != null)
+                {
+                    Vector2 c = player.ChunkCenterRendered(cell.coord);
+                    cell.root.transform.position = new Vector3(c.x, c.y, cellZ);
+                }
                 RefreshCell(cell, snap: false);
                 cell.sr.color = smoothColor ? Color.Lerp(cell.sr.color, cell.target, t) : cell.target;
             }
@@ -178,7 +184,7 @@ namespace LevelStreaming
             float size = manager != null ? manager.ChunkSize : 1f;
             _background.color = backgroundTint;
             _background.sortingOrder = sortingOrder - 1;
-            Vector2 c = center.ToWorldCenter(size);
+            Vector2 c = player != null ? player.WorldPos : center.ToWorldCenter(size);
             _background.transform.position = new Vector3(c.x, c.y, backgroundZ);
             float span = (viewRadius * 2 + 1 + backgroundPadding * 2) * size;
             _background.size = new Vector2(span, span);
@@ -219,7 +225,7 @@ namespace LevelStreaming
         {
             cell.coord = coord;
 
-            Vector2 c = coord.ToWorldCenter(size);
+            Vector2 c = player != null ? player.ChunkCenterRendered(coord) : coord.ToWorldCenter(size);
             cell.root.transform.position = new Vector3(c.x, c.y, cellZ);
 
             float spriteWorld = cellSprite != null ? cellSprite.bounds.size.x : 1f;

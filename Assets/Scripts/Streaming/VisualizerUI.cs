@@ -49,6 +49,19 @@ namespace LevelStreaming
         public Text fovLabel;
         public Slider viewDistanceSlider;
         public Text viewDistanceLabel;
+        public Button resetSightButton;
+
+        [Header("Hysteresis")]
+        public Toggle timeHysteresisToggle;
+        public Toggle distanceHysteresisToggle;
+        public Text hysteresisInfo;
+
+        [Header("Floating Origin")]
+        public FloatingOrigin floatingOrigin;
+        public Toggle floatingOriginToggle;
+        public Text renderPosText;
+        public Text realPosText;
+        public Text rebaseText;
 
         void Awake()
         {
@@ -56,6 +69,7 @@ namespace LevelStreaming
             if (sight == null) sight = FindObjectOfType<SightCone>();
             if (cameraController == null) cameraController = FindObjectOfType<CameraController>();
             if (player == null) player = FindObjectOfType<PlayerController>();
+            if (floatingOrigin == null) floatingOrigin = FindObjectOfType<FloatingOrigin>();
         }
 
         void Start()
@@ -101,6 +115,25 @@ namespace LevelStreaming
                 if (sight != null) viewDistanceSlider.SetValueWithoutNotify(sight.viewDistance);
                 viewDistanceSlider.onValueChanged.AddListener(v => { if (sight != null) sight.viewDistance = v; });
             }
+            if (resetSightButton != null)
+                resetSightButton.onClick.AddListener(() => { if (sight != null) sight.ResetToDefaults(); });
+
+            if (floatingOriginToggle != null)
+            {
+                if (floatingOrigin != null) floatingOriginToggle.SetIsOnWithoutNotify(floatingOrigin.useFloatingOrigin);
+                floatingOriginToggle.onValueChanged.AddListener(v => { if (floatingOrigin != null) floatingOrigin.useFloatingOrigin = v; });
+            }
+
+            if (timeHysteresisToggle != null)
+            {
+                if (manager != null) timeHysteresisToggle.SetIsOnWithoutNotify(manager.useTimeHysteresis);
+                timeHysteresisToggle.onValueChanged.AddListener(v => { if (manager != null) manager.useTimeHysteresis = v; });
+            }
+            if (distanceHysteresisToggle != null)
+            {
+                if (manager != null) distanceHysteresisToggle.SetIsOnWithoutNotify(manager.useDistanceHysteresis);
+                distanceHysteresisToggle.onValueChanged.AddListener(v => { if (manager != null) manager.useDistanceHysteresis = v; });
+            }
         }
 
         // Chunk size can't change live -> apply + reset the whole simulation.
@@ -136,6 +169,11 @@ namespace LevelStreaming
                 Set(loaded, $"Loaded         {manager.CountInState(ChunkState.Loaded)}");
                 Set(loading, $"Loading        {manager.CountInState(ChunkState.Loading)}");
                 Set(unloading, $"Unloading      {manager.CountInState(ChunkState.Unloading)}");
+                Set(hysteresisInfo, $"Cooling down   {manager.UnloadQueueCount}");
+                if (timeHysteresisToggle != null && timeHysteresisToggle.isOn != manager.useTimeHysteresis)
+                    timeHysteresisToggle.SetIsOnWithoutNotify(manager.useTimeHysteresis);
+                if (distanceHysteresisToggle != null && distanceHysteresisToggle.isOn != manager.useDistanceHysteresis)
+                    distanceHysteresisToggle.SetIsOnWithoutNotify(manager.useDistanceHysteresis);
             }
 
             if (sight != null)
@@ -161,6 +199,18 @@ namespace LevelStreaming
                     fovSlider.SetValueWithoutNotify(sight.fovAngle);
                 if (viewDistanceSlider != null && !Mathf.Approximately(viewDistanceSlider.value, sight.viewDistance))
                     viewDistanceSlider.SetValueWithoutNotify(sight.viewDistance);
+            }
+
+            if (player != null)
+            {
+                Set(renderPosText, $"Render pos: ({player.WorldPos.x:0.00}, {player.WorldPos.y:0.00})");
+                Set(realPosText, $"Real pos:   ({player.AbsoluteX:0.00}, {player.AbsoluteY:0.00})");
+            }
+            if (floatingOrigin != null)
+            {
+                Set(rebaseText, $"Rebases: {floatingOrigin.RebaseCount}");
+                if (floatingOriginToggle != null && floatingOriginToggle.isOn != floatingOrigin.useFloatingOrigin)
+                    floatingOriginToggle.SetIsOnWithoutNotify(floatingOrigin.useFloatingOrigin);
             }
         }
 
