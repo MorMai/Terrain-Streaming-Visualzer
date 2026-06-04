@@ -1,0 +1,1 @@
+A lightweight tool that simulates chunk-based world streaming and visualizes loading and unloading behavior, helping developers optimize their chunk management systems for their specific game projects.
