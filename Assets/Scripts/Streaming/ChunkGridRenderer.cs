@@ -115,12 +115,28 @@ namespace LevelStreaming
 
         void OnEnable()
         {
-            if (manager != null) manager.ChunkStateChanged += OnChunkStateChanged;
+            if (manager != null)
+            {
+                manager.ChunkStateChanged += OnChunkStateChanged;
+                manager.WorldReset += OnWorldReset;
+            }
         }
 
         void OnDisable()
         {
-            if (manager != null) manager.ChunkStateChanged -= OnChunkStateChanged;
+            if (manager != null)
+            {
+                manager.ChunkStateChanged -= OnChunkStateChanged;
+                manager.WorldReset -= OnWorldReset;
+            }
+        }
+
+        /// <summary>Recycle every cell and force a fresh rebuild (e.g. after a chunk-size change).</summary>
+        private void OnWorldReset()
+        {
+            foreach (var cell in _cells.Values) Recycle(cell);
+            _cells.Clear();
+            _started = false; // LateUpdate rebuilds at the new chunk size
         }
 
         void Start()

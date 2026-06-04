@@ -31,7 +31,12 @@ namespace LevelStreaming
             float angle = Mathf.Atan2(f.y, f.x) * Mathf.Rad2Deg;
             int qa = Mathf.RoundToInt(angle / angleStep);
 
-            return new StreamingSignature(qx, qy, qa, 0);
+            // Fold FOV + view distance in so live slider tweaks re-stream too.
+            int qFov = Mathf.RoundToInt(sight.fovAngle / 2f);
+            int qDist = Mathf.RoundToInt(sight.viewDistance / 0.25f);
+            int d = qFov * 10000 + qDist;
+
+            return new StreamingSignature(qx, qy, qa, d);
         }
 
         public override IEnumerable<ChunkCoord> GetDesiredChunks(ChunkCoord playerChunk, StreamingContext ctx)

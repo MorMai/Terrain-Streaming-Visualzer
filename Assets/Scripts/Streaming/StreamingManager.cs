@@ -38,6 +38,9 @@ namespace LevelStreaming
         /// <summary>Raised after the active strategy changes (e.g. via Back/Next).</summary>
         public event Action StrategyChanged;
 
+        /// <summary>Raised when the world is reset (e.g. chunk size changed). Views drop and rebuild.</summary>
+        public event Action WorldReset;
+
         private readonly List<IStreamingStrategy> _strategies = new();
         private int _activeIndex;
         private IStreamingStrategy _strategy;
@@ -85,6 +88,42 @@ namespace LevelStreaming
                 Recompute(player.CurrentChunk, ctx); // re-stream under the new policy
             }
             StrategyChanged?.Invoke();
+        }
+
+        // ---- World reset (for changes that can't apply live, e.g. chunk size) --------
+
+        /// <summary>
+        /// Apply a new world chunk size. Because every world&lt;-&gt;chunk coordinate depends on it,
+        /// this can't change live: the player is recentered and the whole simulation is reset.
+        /// </summary>
+        public void SetChunkSize(float newSize)
+        {
+            if (player != null)
+            {
+                player.chunkSize = Mathf.Max(0.01f, newSize);
+                float z = player.transform.position.z;
+                player.transform.position =
+                    new Vector3(player.chunkSize * 0.5f, player.chunkSize * 0.5f, z); // center of chunk (0,0)
+            }
+            ResetStreaming();
+        }
+
+        /// <summary>Stop everything, clear all chunks, and re-stream the initial window from scratch.</summary>
+        public void ResetStreaming()
+        {
+            foreach (var co in _running.Values)
+                if (co != null) StopCoroutine(co);
+            _running.Clear();
+            _chunks.Clear();
+
+            WorldReset?.Invoke(); // tell the renderer to drop its cells and rebuild at the new size
+
+            if (_initialized && _strategy != null && player != null)
+            {
+                var ctx = BuildContext();
+                _lastSignature = _strategy.GetSignature(player.CurrentChunk, ctx);
+                Recompute(player.CurrentChunk, ctx);
+            }
         }
 
         // ---- Debug counters ----------------------------------------------------------
