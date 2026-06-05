@@ -6,7 +6,7 @@ namespace LevelStreaming
 {
     /// <summary>
     /// Context handed to a strategy so it can make richer decisions without the
-    /// StreamingManager hard-coding any particular policy. Extend freely; existing
+    /// ChunkStreamer hard-coding any particular policy. Extend freely; existing
     /// strategies ignore fields they don't need.
     /// </summary>
     public struct StreamingContext
@@ -20,7 +20,7 @@ namespace LevelStreaming
 
     /// <summary>
     /// A small, equatable value a strategy returns to say "my desired set is unchanged while this
-    /// is unchanged." The StreamingManager re-streams only when the signature changes, so static
+    /// is unchanged." The ChunkStreamer re-streams only when the signature changes, so static
     /// strategies (chunk-based) recompute on boundary crossings while dynamic ones (sight cone)
     /// recompute as their inputs — aim, position — change.
     /// </summary>
@@ -35,7 +35,7 @@ namespace LevelStreaming
     }
 
     /// <summary>
-    /// Pluggable decision: "which chunks should be loaded right now?". The StreamingManager
+    /// Pluggable decision: "which chunks should be loaded right now?". The ChunkStreamer
     /// consumes ONLY this interface and diffs the result against what is currently loaded,
     /// so swapping strategies (radius, sight-based, predictive, priority...) needs no change
     /// to the manager or any renderer.
@@ -53,5 +53,12 @@ namespace LevelStreaming
         /// recompute on boundary crossings); aim-based strategies fold in their facing/position.
         /// </summary>
         StreamingSignature GetSignature(ChunkCoord playerChunk, StreamingContext ctx);
+
+        /// <summary>
+        /// Detail tier a desired chunk should be streamed at (v2 design §5.2). Most strategies return
+        /// <see cref="ChunkTier.HighDetail"/>; the Chebyshev ring strategy marks its outer rings as
+        /// <see cref="ChunkTier.Proxy"/>. The base <c>StreamingStrategy</c> supplies a high-detail default.
+        /// </summary>
+        ChunkTier TierFor(ChunkCoord coord, ChunkCoord playerChunk, StreamingContext ctx);
     }
 }

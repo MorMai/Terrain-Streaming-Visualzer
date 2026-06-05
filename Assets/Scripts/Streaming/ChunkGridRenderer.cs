@@ -8,7 +8,7 @@ namespace LevelStreaming
 
     /// <summary>
     /// Pure view. Spawns a pooled grid of cell sprites around the player and colors each by its
-    /// chunk's load state. Subscribes to StreamingManager.ChunkStateChanged and never asks WHY a
+    /// chunk's load state. Subscribes to ChunkStreamer.ChunkStateChanged and never asks WHY a
     /// chunk changed (NFR-1). Almost everything is exposed for tuning: colors, tint, smooth
     /// transitions, coordinate/state value labels, depths, gap, background and a player highlight.
     /// Most settings are applied live each frame, so you can tweak them in Play mode.
@@ -16,7 +16,7 @@ namespace LevelStreaming
     public class ChunkGridRenderer : MonoBehaviour
     {
         [Header("References (auto-found if empty)")]
-        [SerializeField] private StreamingManager manager;
+        [SerializeField] private ChunkStreamer manager;
         [SerializeField] private PlayerController player;
 
         [Header("Sprites")]
@@ -92,7 +92,7 @@ namespace LevelStreaming
 
         void Awake()
         {
-            if (manager == null) manager = FindObjectOfType<StreamingManager>();
+            if (manager == null) manager = FindObjectOfType<ChunkStreamer>();
             if (player == null) player = FindObjectOfType<PlayerController>();
 
             _labelFont = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf")

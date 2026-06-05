@@ -1,20 +1,39 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
 namespace LevelStreaming
 {
     /// <summary>
-    /// Heart of the system. Detects when the player crosses a chunk boundary, asks the active
-    /// IStreamingStrategy which chunks it wants, diffs that against what is currently loaded/loading,
-    /// and drives simulated load/unload lifecycles.
+    /// The streaming + origin driver from the v2 "Floating Origin &amp; Terrain Streaming" design — a
+    /// <b>MonoBehaviour</b> (not ECS), per World Engine v1.7. Each frame it asks the active
+    /// <see cref="StreamingStrategy"/> which chunks it wants (the design's Chebyshev HD/Proxy rings),
+    /// diffs that against what is loaded, and drives the chunk state machine. The actual load/unload
+    /// work is delegated to an <see cref="IChunkLoader"/> (simulated here; Addressables in production),
+    /// and lifecycle transitions are broadcast over the <c>*_Sig</c> ScriptableObject event bus.
+    ///
+    /// Renamed from <c>StreamingManager</c> to match the design's <c>ChunkStreamer</c>; the serialized
+    /// field names are unchanged so existing scene wiring is preserved.
     /// </summary>
-    public class StreamingManager : MonoBehaviour
+    public class ChunkStreamer : MonoBehaviour
     {
         [Header("References (auto-found if left empty)")]
         [SerializeField] private PlayerController player;
         [SerializeField] private SightCone sight;
+        [Tooltip("Optional. Origin-shift owner; needed for Sovereign Jump.")]
+        [SerializeField] private FloatingOrigin floatingOrigin;
+
+        [Header("Design assets (optional — *_Cfg / *_Var / *_Sig / registry)")]
+        [Tooltip("Designer world constants. Strategies that support it read ring radii from here.")]
+        public World_Cfg config;
+        [Tooltip("Runtime world state record (true pos, chunk index). Updated each frame when assigned.")]
+        public WorldState_Var worldState;
+        [Tooltip("Raised when a chunk reaches Loaded.")]
+        public ChunkEvent_Sig onChunkLoaded_Sig;
+        [Tooltip("Raised when a chunk reaches Unloaded.")]
+        public ChunkEvent_Sig onChunkUnloaded_Sig;
+        [Tooltip("Sovereign Jump (fast-travel) target table.")]
+        public LocationRegistry_SO locations;
 
         [Header("Strategies (ScriptableObject assets)")]
         public List<StreamingStrategy> strategies = new();
@@ -46,20 +65,29 @@ namespace LevelStreaming
         private int _activeIndex;
         private IStreamingStrategy _strategy;
         private readonly Dictionary<ChunkCoord, Chunk> _chunks = new();
-        private readonly Dictionary<ChunkCoord, Coroutine> _running = new();
 
-        // Track chunks that are cooling down. Key = Chunk, Value = Time when it should actually unload.
+        // Chunks that are cooling down. Key = coord, Value = Time when it became unwanted.
         private readonly Dictionary<ChunkCoord, float> _unloadQueue = new();
 
+        private IChunkLoader _loader;
         private StreamingSignature _lastSignature;
         private bool _initialized;
 
         public float ChunkSize => player != null ? player.chunkSize : 1f;
 
+        /// <summary>Swap the loader (e.g. inject an AddressablesChunkLoader). Defaults to a simulated one.</summary>
+        public IChunkLoader Loader
+        {
+            get => _loader;
+            set => _loader = value;
+        }
+
         void Awake()
         {
             if (player == null) player = FindObjectOfType<PlayerController>();
             if (sight == null) sight = FindObjectOfType<SightCone>();
+            if (floatingOrigin == null) floatingOrigin = FindObjectOfType<FloatingOrigin>();
+            _loader ??= new SimulatedChunkLoader(this, () => loadDelay, () => unloadDelay);
             BuildStrategyList();
         }
 
@@ -107,9 +135,8 @@ namespace LevelStreaming
 
         public void ResetStreaming()
         {
-            foreach (var co in _running.Values)
-                if (co != null) StopCoroutine(co);
-            _running.Clear();
+            foreach (var coord in _chunks.Keys)
+                _loader?.Abort(coord);
             _chunks.Clear();
             _unloadQueue.Clear();
 
@@ -121,6 +148,19 @@ namespace LevelStreaming
                 _lastSignature = _strategy.GetSignature(player.CurrentChunk, ctx);
                 Recompute(player.CurrentChunk, ctx);
             }
+        }
+
+        /// <summary>
+        /// Sovereign Jump (design §8): teleport to a registered location, recompute the origin offset
+        /// so the player lands near physical origin, and stream the destination rings.
+        /// </summary>
+        public bool SovereignJump(string locationId)
+        {
+            if (locations == null || floatingOrigin == null || player == null) return false;
+            if (!locations.TryGet(locationId, out Vector2 absolute)) return false;
+            floatingOrigin.JumpToAbsolute(absolute);
+            ResetStreaming();
+            return true;
         }
 
         public int TrackedCount => _chunks.Count;
@@ -138,7 +178,7 @@ namespace LevelStreaming
         {
             if (player == null || _strategy == null)
             {
-                Debug.LogError("[StreamingManager] Missing PlayerController or IStreamingStrategy.");
+                Debug.LogError("[ChunkStreamer] Missing PlayerController or IStreamingStrategy.");
                 enabled = false;
                 return;
             }
@@ -160,8 +200,18 @@ namespace LevelStreaming
                 Recompute(player.CurrentChunk, ctx);
             }
 
-            // Process our time-delayed unloads
             ProcessUnloadQueue();
+            PublishWorldState();
+        }
+
+        /// <summary>Mirror the player's absolute position / chunk index into the WorldState_Var record.</summary>
+        private void PublishWorldState()
+        {
+            if (worldState == null || player == null) return;
+            worldState.TrueWorldX = player.AbsoluteX;
+            worldState.TrueWorldY = player.AbsoluteY;
+            var c = player.CurrentChunk;
+            worldState.ChunkIndex = new Vector2Int(c.cx, c.cy);
         }
 
         private StreamingContext BuildContext()
@@ -178,35 +228,36 @@ namespace LevelStreaming
         {
             var desired = new HashSet<ChunkCoord>(_strategy.GetDesiredChunks(playerChunk, ctx));
 
-            // 1. Load newly desired chunks
+            // 1. Load (or re-tier) newly desired chunks.
             foreach (var coord in desired)
             {
-                // If this chunk was scheduled to be destroyed, rescue it!
+                ChunkTier tier = _strategy.TierFor(coord, playerChunk, ctx);
+
+                // Rescue a chunk that was queued for delayed unload.
                 if (_unloadQueue.ContainsKey(coord))
                 {
                     _unloadQueue.Remove(coord);
                     if (logStateChanges) Debug.Log($"[Chunk {coord}] Unload canceled (saved by user movement/rotation).");
                 }
 
-                var st = GetState(coord);
-                if (st == ChunkState.Loaded || st == ChunkState.Loading) continue;
-                RequestLoad(coord);
+                var chunk = GetOrCreate(coord);
+                chunk.Tier = tier; // a real loader would swap content on a tier change; the visualizer just recolors
+
+                if (chunk.State == ChunkState.Loaded || chunk.State == ChunkState.Loading) continue;
+                RequestLoad(chunk);
             }
 
-            // 2. Queue undesired active chunks for delayed unload
+            // 2. Queue undesired active chunks for delayed unload.
             var active = new List<ChunkCoord>(_chunks.Keys);
             foreach (var coord in active)
             {
                 if (desired.Contains(coord)) continue;
 
                 var st = _chunks[coord].State;
-                // Only queue chunks that are actually usable or currently trying to get loaded
                 if (st == ChunkState.Loaded || st == ChunkState.Loading)
                 {
                     if (!_unloadQueue.ContainsKey(coord))
-                    {
-                        _unloadQueue[coord] = Time.time; // remember WHEN it became unwanted
-                    }
+                        _unloadQueue[coord] = Time.time;
                 }
             }
         }
@@ -226,7 +277,6 @@ namespace LevelStreaming
                 ChunkCoord coord = kvp.Key;
                 float queuedAt = kvp.Value;
 
-                // A disabled condition never blocks the unload; an enabled one must be satisfied.
                 bool timeReady = !useTimeHysteresis || (now - queuedAt >= unloadCooldown);
                 bool distanceReady = !useDistanceHysteresis || DistanceReady(coord);
 
@@ -242,7 +292,7 @@ namespace LevelStreaming
                 foreach (var coord in toUnload)
                 {
                     _unloadQueue.Remove(coord);
-                    RequestUnload(coord); // execute the real unload lifecycle
+                    RequestUnload(coord);
                 }
             }
         }
@@ -269,47 +319,48 @@ namespace LevelStreaming
         private void OnChunkStateChanged(Chunk c)
         {
             if (logStateChanges)
-                Debug.Log($"[Chunk {c.Coord}] -> {c.State}");
+                Debug.Log($"[Chunk {c.Coord}] -> {c.State} ({c.Tier})");
             ChunkStateChanged?.Invoke(c);
         }
 
-        private void RequestLoad(ChunkCoord coord)
+        // --- chunk state machine, driven through the IChunkLoader seam ---
+
+        private void RequestLoad(Chunk chunk)
         {
-            var chunk = GetOrCreate(coord);
-            StartLifecycle(coord, LoadRoutine(chunk));
+            ChunkCoord coord = chunk.Coord;
+            chunk.SetState(ChunkState.Loading);
+            _loader.Load(coord, chunk.Tier, () => OnLoadComplete(coord));
+        }
+
+        private void OnLoadComplete(ChunkCoord coord)
+        {
+            if (!_chunks.TryGetValue(coord, out var chunk) || chunk.State != ChunkState.Loading) return;
+            chunk.SetState(ChunkState.Loaded);
+            onChunkLoaded_Sig?.Raise(coord);
         }
 
         private void RequestUnload(ChunkCoord coord)
         {
             if (!_chunks.TryGetValue(coord, out var chunk)) return;
-            StartLifecycle(coord, UnloadRoutine(chunk));
-        }
-
-        private void StartLifecycle(ChunkCoord coord, IEnumerator routine)
-        {
-            if (_running.TryGetValue(coord, out var existing) && existing != null)
-                StopCoroutine(existing);
-            _running[coord] = StartCoroutine(routine);
-        }
-
-        private IEnumerator LoadRoutine(Chunk chunk)
-        {
-            chunk.SetState(ChunkState.Loading);
-            if (loadDelay > 0f) yield return new WaitForSeconds(loadDelay);
-            chunk.SetState(ChunkState.Loaded);
-            _running.Remove(chunk.Coord);
-        }
-
-        private IEnumerator UnloadRoutine(Chunk chunk)
-        {
+            _loader.Abort(coord); // release an in-flight load if it was still Loading
             chunk.SetState(ChunkState.Unloading);
-            if (unloadDelay > 0f) yield return new WaitForSeconds(unloadDelay);
+            _loader.Unload(coord, () => OnUnloadComplete(coord));
+        }
+
+        private void OnUnloadComplete(ChunkCoord coord)
+        {
+            if (!_chunks.TryGetValue(coord, out var chunk)) return;
             chunk.SetState(ChunkState.Unloaded);
-            _running.Remove(chunk.Coord);
+            _chunks.Remove(coord);
+            onChunkUnloaded_Sig?.Raise(coord);
         }
 
         public ChunkState GetState(ChunkCoord coord)
             => _chunks.TryGetValue(coord, out var c) ? c.State : ChunkState.Unloaded;
+
+        /// <summary>Current detail tier of a tracked chunk (defaults to high-detail when untracked).</summary>
+        public ChunkTier GetTier(ChunkCoord coord)
+            => _chunks.TryGetValue(coord, out var c) ? c.Tier : ChunkTier.HighDetail;
 
         void OnDrawGizmos()
         {
@@ -317,10 +368,9 @@ namespace LevelStreaming
             float size = ChunkSize;
             foreach (var kv in _chunks)
             {
-                // Visual differentiator for chunks cooling down
                 if (_unloadQueue.ContainsKey(kv.Key))
                 {
-                    Gizmos.color = new Color(0.5f, 0.2f, 0.8f); // Purple means "Unload Buffer Pending"
+                    Gizmos.color = new Color(0.5f, 0.2f, 0.8f); // purple: unload buffer pending
                 }
                 else
                 {
@@ -331,6 +381,8 @@ namespace LevelStreaming
                         case ChunkState.Unloading: Gizmos.color = new Color(1f, 0.5f, 0f); break;
                         default: Gizmos.color = Color.gray; break;
                     }
+                    // Dim the proxy ring so the HD/Proxy split is visible.
+                    if (kv.Value.Tier == ChunkTier.Proxy) Gizmos.color *= 0.55f;
                 }
                 Vector2 c = player.ChunkCenterRendered(kv.Key);
                 Gizmos.DrawWireCube(c, new Vector3(size * 0.96f, size * 0.96f, 0f));

@@ -12,7 +12,7 @@ namespace LevelStreaming
     public class VisualizerUI : MonoBehaviour
     {
         [Header("References (auto-found if empty)")]
-        public StreamingManager manager;
+        public ChunkStreamer manager;
         public SightCone sight;
         public CameraController cameraController;
         public PlayerController player;
@@ -69,7 +69,7 @@ namespace LevelStreaming
 
         void Awake()
         {
-            if (manager == null) manager = FindObjectOfType<StreamingManager>();
+            if (manager == null) manager = FindObjectOfType<ChunkStreamer>();
             if (sight == null) sight = FindObjectOfType<SightCone>();
             if (cameraController == null) cameraController = FindObjectOfType<CameraController>();
             if (player == null) player = FindObjectOfType<PlayerController>();

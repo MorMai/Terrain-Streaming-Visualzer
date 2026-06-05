@@ -2464,7 +2464,7 @@ GameObject:
   - component: {fileID: 579457432}
   - component: {fileID: 579457431}
   m_Layer: 0
-  m_Name: StreamingManager
+  m_Name: ChunkStreamer
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -2481,7 +2481,7 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 89e19c51d73addb4ab8326ca9fd96c0a, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::LevelStreaming.StreamingManager
+  m_EditorClassIdentifier: Assembly-CSharp::LevelStreaming.ChunkStreamer
   player: {fileID: 0}
   sight: {fileID: 0}
   strategies:
